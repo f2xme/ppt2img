@@ -1,0 +1,12 @@
+[package]
+name = "ppt2img"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+image = "0.25"
+pdfium-render = { version = "0.8.37", default-features = false, features = ["image_latest", "pdfium_latest"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+webpx = "0.1.3"
