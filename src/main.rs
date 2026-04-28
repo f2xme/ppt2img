@@ -208,7 +208,6 @@ fn run(cli: Cli) -> AppResult<RunReport> {
     validate_unique_output_dirs(&config, &jobs)?;
     validate_output_dirs_not_nested(&config, &jobs)?;
 
-    let pdfium = bind_pdfium(config.pdfium_lib.as_deref())?;
     log_human(&config, format_args!("Found {} document(s)", jobs.len()));
 
     ensure_parent_dir(&config.output_root)?;
@@ -217,7 +216,6 @@ fn run(cli: Cli) -> AppResult<RunReport> {
     for job in &jobs {
         documents.push(convert_job(
             &config,
-            &pdfium,
             job,
             staging_root.path(),
             &config.output_root,
@@ -706,7 +704,6 @@ fn bind_pdfium(path: Option<&Path>) -> AppResult<Pdfium> {
 
 fn convert_job(
     config: &Config,
-    pdfium: &Pdfium,
     job: &Job,
     staging_root: &Path,
     final_root: &Path,
@@ -735,7 +732,8 @@ fn convert_job(
     };
 
     let render_started = Instant::now();
-    let rendered = render_pdf_to_images(pdfium, &pdf_path, &staging_out_dir, config)?;
+    let pdfium = bind_pdfium(config.pdfium_lib.as_deref())?;
+    let rendered = render_pdf_to_images(&pdfium, &pdf_path, &staging_out_dir, config)?;
     let image_render_ms = duration_ms(render_started.elapsed());
 
     let intermediate_pdf = if !is_pdf(&job.source_path) && config.keep_pdf {
