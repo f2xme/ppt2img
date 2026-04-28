@@ -1,5 +1,6 @@
 /target/
 /dist/
 /ppt_images/
+/test-output*/
 *.log
 .DS_Store
