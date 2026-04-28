@@ -143,6 +143,14 @@ struct RenderedImages {
     file_names: Vec<String>,
 }
 
+struct PreparedJob<'a> {
+    job: &'a Job,
+    pdf_path: PathBuf,
+    staging_out_dir: PathBuf,
+    _pdf_temp_dir: Option<TempDir>,
+    pdf_export_ms: Option<u64>,
+}
+
 #[derive(Debug, Serialize)]
 struct RunReport {
     success: bool,
@@ -212,12 +220,18 @@ fn run(cli: Cli) -> AppResult<RunReport> {
 
     ensure_parent_dir(&config.output_root)?;
     let staging_root = TempDir::new_sibling(&config.output_root, "batch")?;
-    let mut documents = Vec::with_capacity(jobs.len());
+    let mut prepared_jobs = Vec::with_capacity(jobs.len());
     for job in &jobs {
-        documents.push(convert_job(
+        prepared_jobs.push(prepare_job_pdf(&config, job, staging_root.path())?);
+    }
+
+    let pdfium = bind_pdfium(config.pdfium_lib.as_deref())?;
+    let mut documents = Vec::with_capacity(jobs.len());
+    for prepared_job in &prepared_jobs {
+        documents.push(render_prepared_job(
             &config,
-            job,
-            staging_root.path(),
+            &pdfium,
+            prepared_job,
             &config.output_root,
         )?);
     }
@@ -702,14 +716,12 @@ fn bind_pdfium(path: Option<&Path>) -> AppResult<Pdfium> {
     Ok(Pdfium::new(bindings))
 }
 
-fn convert_job(
+fn prepare_job_pdf<'a>(
     config: &Config,
-    job: &Job,
+    job: &'a Job,
     staging_root: &Path,
-    final_root: &Path,
-) -> AppResult<DocumentReport> {
+) -> AppResult<PreparedJob<'a>> {
     let staging_out_dir = output_dir_for_job(staging_root, job);
-    let final_out_dir = output_dir_for_job(final_root, job);
     fs::create_dir_all(&staging_out_dir).map_err(|err| {
         format!(
             "failed to create staging output directory {:?}: {err}",
@@ -719,29 +731,48 @@ fn convert_job(
 
     log_human(config, format_args!("Converting {:?}", job.source_path));
 
-    let mut _pdf_temp_dir = None;
-    let mut pdf_export_ms = None;
-    let pdf_path = if is_pdf(&job.source_path) {
-        job.source_path.clone()
-    } else {
-        let dir = TempDir::new_system("ppt2img")?;
-        let (path, elapsed) = export_presentation_to_pdf(config, job, dir.path())?;
-        pdf_export_ms = Some(duration_ms(elapsed));
-        _pdf_temp_dir = Some(dir);
-        path
-    };
+    if is_pdf(&job.source_path) {
+        return Ok(PreparedJob {
+            job,
+            pdf_path: job.source_path.clone(),
+            staging_out_dir,
+            _pdf_temp_dir: None,
+            pdf_export_ms: None,
+        });
+    }
+
+    let dir = TempDir::new_system("ppt2img")?;
+    let (pdf_path, elapsed) = export_presentation_to_pdf(config, job, dir.path())?;
+
+    Ok(PreparedJob {
+        job,
+        pdf_path,
+        staging_out_dir,
+        _pdf_temp_dir: Some(dir),
+        pdf_export_ms: Some(duration_ms(elapsed)),
+    })
+}
+
+fn render_prepared_job(
+    config: &Config,
+    pdfium: &Pdfium,
+    prepared_job: &PreparedJob<'_>,
+    final_root: &Path,
+) -> AppResult<DocumentReport> {
+    let job = prepared_job.job;
+    let staging_out_dir = &prepared_job.staging_out_dir;
+    let final_out_dir = output_dir_for_job(final_root, job);
 
     let render_started = Instant::now();
-    let pdfium = bind_pdfium(config.pdfium_lib.as_deref())?;
-    let rendered = render_pdf_to_images(&pdfium, &pdf_path, &staging_out_dir, config)?;
+    let rendered = render_pdf_to_images(pdfium, &prepared_job.pdf_path, &staging_out_dir, config)?;
     let image_render_ms = duration_ms(render_started.elapsed());
 
     let intermediate_pdf = if !is_pdf(&job.source_path) && config.keep_pdf {
         let staged_pdf = staging_out_dir.join(format!("{}.pdf", job.stem));
-        fs::copy(&pdf_path, &staged_pdf).map_err(|err| {
+        fs::copy(&prepared_job.pdf_path, &staged_pdf).map_err(|err| {
             format!(
                 "failed to preserve intermediate PDF from {:?} to {:?}: {err}",
-                pdf_path, staged_pdf
+                prepared_job.pdf_path, staged_pdf
             )
         })?;
         let final_pdf = final_out_dir.join(format!("{}.pdf", job.stem));
@@ -766,7 +797,7 @@ fn convert_job(
         dpi: config.dpi,
         output_format: config.output_format,
         quality: config.quality,
-        pdf_export_ms,
+        pdf_export_ms: prepared_job.pdf_export_ms,
         image_render_ms,
         intermediate_pdf,
         files: rendered
