@@ -764,7 +764,7 @@ fn render_prepared_job(
     let final_out_dir = output_dir_for_job(final_root, job);
 
     let render_started = Instant::now();
-    let rendered = render_pdf_to_images(pdfium, &prepared_job.pdf_path, &staging_out_dir, config)?;
+    let rendered = render_pdf_to_images(pdfium, &prepared_job.pdf_path, staging_out_dir, config)?;
     let image_render_ms = duration_ms(render_started.elapsed());
 
     let intermediate_pdf = if !is_pdf(&job.source_path) && config.keep_pdf {
